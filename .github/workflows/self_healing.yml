@@ -1,0 +1,15 @@
+name: Self-Healing System
+on:
+  schedule:
+    - cron: '0 3 * * *'  # Daily 5AM SAST
+  workflow_dispatch:
+
+jobs:
+  system_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Health Checks
+        run: |
+          python ai_agents/agent_orchestrator.py --task=system_health
+          python ai_agents/training_module.py --retrain
