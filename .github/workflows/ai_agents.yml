@@ -1,0 +1,96 @@
+name: AI Agents Orchestration
+on:
+  schedule:
+    # Run core tasks hourly (SAST = UTC+2)
+    - cron: '0 * * * *'          # Top of every hour
+    # Daily deep tasks at 2am SAST (00:00 UTC)
+    - cron: '0 0 * * *'          # Midnight UTC
+    # Weekly model retraining on Mondays
+    - cron: '0 0 * * 1'          # Monday midnight UTC
+  workflow_dispatch:             # Manual trigger option
+
+jobs:
+  ai_agents:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Africa/Johannesburg    # SAST timezone
+      PYTHONUNBUFFERED: 1
+
+    steps:
+      # Setup environment
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ai_agents/requirements.txt
+          sudo apt-get -y install libcairo2-dev libjpeg-dev libgif-dev
+
+      # Configure secrets
+      - name: Configure environment
+        env:
+          FIREBASE_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          PAYFAST_MERCHANT_ID: ${{ secrets.PAYFAST_MERCHANT_ID }}
+          PAYFAST_MERCHANT_KEY: ${{ secrets.PAYFAST_MERCHANT_KEY }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        run: |
+          echo "$FIREBASE_KEY" > firebase-key.json
+          echo "PAYFAST_MID=$PAYFAST_MERCHANT_ID" >> .env
+          echo "PAYFAST_MKEY=$PAYFAST_MERCHANT_KEY" >> .env
+          echo "HF_AUTH_TOKEN=$HF_TOKEN" >> .env
+
+      # Core hourly tasks
+      - name: Run hourly agents
+        run: |
+          python ai_agents/agent_orchestrator.py --tasks=renewals,support,social_media
+
+      # Daily midnight tasks (SAST)
+      - name: Run daily agents (00:00 UTC)
+        if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 0 * * *' }}
+        run: |
+          python ai_agents/data_scraper.py --full-scan
+          python ai_agents/agent_orchestrator.py --tasks=health_audit,revenue_report
+          python ai_agents/content_moderator.py --audit
+
+      # Weekly model retraining
+      - name: Retrain ML models
+        if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 0 * * 1' }}
+        run: |
+          python ai_agents/training_module.py --retrain --upload
+
+      # Image generation service
+      - name: Generate location images
+        if: ${{ github.event_name == 'workflow_dispatch' || github.event.schedule == '0 0 * * *' }}
+        run: |
+          python ai_agents/image_generator.py \
+            --prompts "bloemfontein skyline" "welkom gold mine" "xhariep landscape" \
+            --output-dir frontend/public/assets/
+
+      # Self-healing and update
+      - name: System self-healing
+        if: ${{ always() }}  # Runs even if previous steps fail
+        run: |
+          python ai_agents/agent_orchestrator.py --tasks=recovery
+          git config user.name "AI Agent"
+          git config user.email "ai-agent@freestatedirectory.com"
+          git add .
+          git commit -m "Auto-recovery: System self-healing $(date +'%Y-%m-%d')" || echo "No changes to commit"
+          git push origin main
+
+      # Auto-deploy to Netlify
+      - name: Deploy to production
+        if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 0 * * *' }}
+        uses: nwtgck/actions-netlify@v2
+        with:
+          publish-dir: './frontend/public'
+          production-branch: main
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          netlify-auth-token: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          netlify-site-id: ${{ secrets.NETLIFY_SITE_ID }}
+          enable-commit-comment: false
